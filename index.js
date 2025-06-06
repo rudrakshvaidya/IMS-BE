@@ -1125,3 +1125,140 @@ server.delete('/adminteams/:id', async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
+
+
+
+server.get("/owner/team", async (req, res) => {
+  try {
+    const token = req.headers.token;
+    if (!token) {
+      return res.status(401).json({ error: "Authentication token required." });
+    }
+
+    // 1. Find the user making the request by their token
+    const user = await db.collection("USERS").findOne({ token });
+    if (!user) {
+      // Send a "Forbidden" error so the frontend knows to redirect to login
+      return res.status(403).json({ error: "Forbidden: Invalid token." });
+    }
+
+    // 2. Check if the user is actually an owner
+    if (!user.isOwner) {
+      return res.status(403).json({ error: "Forbidden: You do not own a team." });
+    }
+
+    // 3. Find the team using the ID stored in the user document
+    const teamId = new ObjectId(user.isOwner);
+    const team = await db.collection("TEAMS").findOne({ _id: teamId });
+
+    if (!team) {
+      return res.status(404).json({ error: "Your owned team could not be found." });
+    }
+    
+    // 4. Send the team data back, matching the format the frontend expects.
+    res.status(200).json({ team: team });
+
+  } catch (err) {
+    console.error("Error fetching owned team:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+/**
+ * A SECURE ROUTE FOR AN OWNER TO UPDATE THEIR OWN TEAM'S DETAILS
+ * It only allows changing non-critical fields like logo and motto.
+ */
+server.patch("/owner/team", async (req, res) => {
+  try {
+    const token = req.headers.token;
+    if (!token) return res.status(401).json({ error: "Token required" });
+
+    const user = await db.collection("USERS").findOne({ token });
+    if (!user || !user.isOwner) {
+      return res.status(403).json({ error: "Forbidden. You do not own a team." });
+    }
+
+    // Log the incoming body for easy debugging
+    console.log("Request to update team received with body:", req.body);
+
+    const { name, captain, logo, moto } = req.body;
+
+    // Perform validation for the required fields.
+    if (!name || name.trim() === '' || !captain || captain.trim() === '') {
+      return res.status(400).json({ error: "Team Name and Captain are required and cannot be empty." });
+    }
+
+    // Build the update object dynamically. This is safer.
+    // It prevents accidentally overwriting a field with 'undefined' if it's not sent.
+    const fieldsToUpdate = {
+        name: name,
+        captain: captain,
+        updatedAt: new Date()
+    };
+    
+    // Only add logo and moto if they were actually provided in the request.
+    if (logo !== undefined) {
+        fieldsToUpdate.logo = logo;
+    }
+    if (moto !== undefined) {
+        fieldsToUpdate.moto = moto;
+    }
+
+    const teamIdToUpdate = new ObjectId(user.isOwner);
+
+    // Perform the update with the safely constructed object.
+    const result = await db.collection("TEAMS").updateOne(
+      { _id: teamIdToUpdate },
+      { $set: fieldsToUpdate }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: "Your owned team could not be found." });
+    }
+
+    res.status(200).json({ message: "Team details updated successfully." });
+  } catch (err) {
+    console.error("Error updating owned team:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+
+/**
+ * A SECURE ROUTE FOR AN OWNER TO MANAGE THEIR ROSTER
+ * Allows adding or removing a player from their team.
+ */
+server.patch("/owner/roster", async (req, res) => {
+  try {
+    const token = req.headers.token;
+    if (!token) return res.status(401).json({ error: "Token required" });
+    
+    const { playerId, action } = req.body; // Expecting an action: 'add' or 'remove'
+    if (!playerId || !action || !['add', 'remove'].includes(action)) {
+      return res.status(400).json({ error: "A 'playerId' and 'action' ('add' or 'remove') are required." });
+    }
+    if (!ObjectId.isValid(playerId)) {
+      return res.status(400).json({ error: "The provided player ID has an invalid format." });
+    }
+
+    const owner = await db.collection("USERS").findOne({ token });
+    if (!owner || !owner.isOwner) {
+      return res.status(403).json({ error: "Forbidden. You do not own a team." });
+    }
+
+    const ownerTeamIdString = owner.isOwner;
+    // If 'add', set playingFor to the owner's team ID. If 'remove', set it to null (unassigned).
+    const newPlayingForValue = action === 'add' ? ownerTeamIdString : null;
+
+    const result = await db.collection("USERS").updateOne(
+      { _id: new ObjectId(playerId) },
+      { $set: { playingFor: newPlayingForValue } }
+    );
+
+    if (result.matchedCount === 0) return res.status(404).json({ error: "Player not found." });
+    
+    res.status(200).json({ message: `Player successfully ${action === 'add' ? 'added to' : 'removed from'} roster.` });
+  } catch (err) {
+    console.error("Error managing roster:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
