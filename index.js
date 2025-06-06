@@ -297,6 +297,516 @@ server.get("/users/ownedTeams", async (req, res) => {
   }
 });
 
+// 
+
+
+//BELOW ARE FOR ADMINS,
+// PUT - Update player (Admin only)
+//server.put("/players/:id", async (req, res) => {
+  // const token = req.headers.token;
+  // const playerId = req.params.id;
+  
+  // if (!token) {
+  //   return res.status(401).json({ error: "Token required" });
+  // }
+
+  // try {
+  //   await connection.connect();
+  //   const db = await connection.db(DB);
+  //   const usersCollection = db.collection("USERS");
+  //   const playersCollection = db.collection("USERS");
+
+  //   // Check if user is admin
+  //   const user = await usersCollection.findOne({ token });
+  //   if (!user || !user.isAdmin) {
+  //     return res.status(403).json({ error: "Admin access required" });
+  //   }
+
+  //   const { name, nationality, specialization, image, playingForName } = req.body;
+    
+  //   // Validate required fields
+  //   if (!name || !nationality || !specialization) {
+  //     return res.status(400).json({ error: "Name, nationality, and specialization are required" });
+  //   }
+
+  //   const updateData = {
+  //     name,
+  //     nationality,
+  //     specialization,
+  //     image: image || "",
+  //     playingForName: playingForName || "",
+  //     updatedAt: new Date()
+  //   };
+
+  //   const result = await playersCollection.updateOne(
+  //     { _id: new libMongodb.ObjectId(playerId) },
+  //     { $set: updateData }
+  //   );
+
+  //   if (result.matchedCount === 0) {
+  //     return res.status(404).json({ error: "Player not found" });
+  //   }
+
+  //   res.status(200).json({ message: "Player updated successfully" });
+
+  // } catch (err) {
+  //   console.error(err);
+  //   res.status(500).json({ error: "Internal server error" });
+  // } finally {
+  //   connection.close();
+  // }
+//});
+// DELETE - Delete player (Admin only)
+server.delete("/adminplayers/:id", async (req, res) => {
+  const token = req.headers.token;
+  const playerId = req.params.id;
+  
+  if (!token) {
+    return res.status(401).json({ error: "Token required" });
+  }
+
+  try {
+    await connection.connect();
+    const db = await connection.db(DB);
+    const usersCollection = db.collection("USERS");
+
+    // Check if user is admin
+    const user = await usersCollection.findOne({ token });
+    if (!user || !user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const result = await usersCollection.deleteOne({ 
+      _id: new libMongodb.ObjectId(playerId) 
+    });
+
+    if (result.deletedCount === 0) {
+      return res.status(404).json({ error: "Player not found" });
+    }
+
+    res.status(200).json({ message: "Player deleted successfully" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    connection.close();
+  }
+});
+server.get("/adminplayers", async (req, res) => {
+  const token = req.headers.token;
+  
+  if (!token) {
+    return res.status(401).json({ error: "Token required" });
+  }
+
+  try {
+    await connection.connect();
+    const db = await connection.db(DB);
+    const usersCollection = db.collection("USERS");
+
+    // Verify token
+    const user = await usersCollection.findOne({ token });
+    if (!user) {
+      return res.status(401).json({ error: "Invalid token" });
+    }
+
+    // Fetch all players (users with playingFor field)
+    const players = await usersCollection.find(
+      { playingFor: { $exists: true, $ne: null } },
+      { 
+        projection: { 
+          password: 0, // Don't send password in response
+          token: 0 // Don't send token in response
+        } 
+      }
+    ).toArray();
+
+    res.status(200).json(players);
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    connection.close();
+  }
+});
+server.post("/adminplayers", async (req, res) => {
+  const token = req.headers.token;
+  
+  if (!token) {
+    return res.status(401).json({ error: "Token required" });
+  }
+
+  try {
+    await connection.connect();
+    const db = await connection.db(DB);
+    const usersCollection = db.collection("USERS");
+    const teamsCollection = db.collection("TEAMS");
+
+    // Validate token and admin status
+    const user = await usersCollection.findOne({ token });
+    if (!user || !user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const {
+      name,
+      password,
+      email,
+      phone,
+      playingFor,
+      playingForName,
+      image,
+      nationality,
+      specialization,
+      stats
+    } = req.body;
+
+    // Validate required fields
+    if (!name || !password || !email || !phone || !playingFor || !nationality || !specialization) {
+      return res.status(400).json({ error: "Missing required fields: name, password, email, phone, playingFor, nationality, specialization" });
+    }
+
+    // Check if email already exists
+    const existingUser = await usersCollection.findOne({ email });
+    if (existingUser) {
+      return res.status(400).json({ error: "Email already exists" });
+    }
+
+    // Validate team exists
+    const team = await teamsCollection.findOne({ _id: new libMongodb.ObjectId(playingFor) });
+    if (!team) {
+      return res.status(400).json({ error: "Invalid team selected" });
+    }
+
+    const newPlayer = {
+      name,
+      password, // In production, you should hash this password
+      email,
+      phone,
+      playingFor,
+      playingForName: playingForName || team.name,
+      image: image || "",
+      nationality,
+      specialization,
+      stats: {
+        runs: stats?.runs || "0",
+        debut: stats?.debut || "",
+        dob: stats?.dob || "",
+        matches: stats?.matches || "0"
+      },
+      createdAt: new Date(),
+      updatedAt: new Date()
+    };
+
+    const result = await usersCollection.insertOne(newPlayer);
+    res.status(201).json({ message: "Player created successfully", playerId: result.insertedId });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    connection.close();
+  }
+});
+server.patch("/adminplayers/:id", async (req, res) => {
+  const token = req.headers.token;
+  const playerId = req.params.id;
+  
+  if (!token) {
+    return res.status(401).json({ error: "Token required" });
+  }
+
+  try {
+    await connection.connect();
+    const db = await connection.db(DB);
+    const usersCollection = db.collection("USERS");
+    const teamsCollection = db.collection("TEAMS");
+
+    // Check if user is admin
+    const user = await usersCollection.findOne({ token });
+    if (!user || !user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const { 
+      name, 
+      password, 
+      email, 
+      phone, 
+      nationality, 
+      specialization, 
+      image, 
+      playingFor, 
+      playingForName,
+      stats 
+    } = req.body;
+    
+    // Validate required fields
+    if (!name || !nationality || !specialization || !playingFor) {
+      return res.status(400).json({ error: "Name, nationality, specialization, and team are required" });
+    }
+
+    // Validate team exists
+    const team = await teamsCollection.findOne({ _id: new libMongodb.ObjectId(playingFor) });
+    if (!team) {
+      return res.status(400).json({ error: "Invalid team selected" });
+    }
+
+    const updateData = {
+      name,
+      nationality,
+      specialization,
+      image: image || "",
+      playingFor,
+      playingForName: playingForName || team.name,
+      stats: {
+        runs: stats?.runs || "0",
+        debut: stats?.debut || "",
+        dob: stats?.dob || "",
+        matches: stats?.matches || "0"
+      },
+      updatedAt: new Date()
+    };
+
+    // Add optional fields if provided
+    if (email) updateData.email = email;
+    if (phone) updateData.phone = phone;
+    if (password) updateData.password = password; // In production, hash this
+
+    const result = await usersCollection.updateOne(
+      { _id: new libMongodb.ObjectId(playerId) },
+      { $set: updateData }
+    );
+
+    if (result.matchedCount === 0) {
+      return res.status(404).json({ error: "Player not found" });
+    }
+
+    res.status(200).json({ message: "Player updated successfully" });
+
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    connection.close();
+  }
+});
+
+// Add these endpoints to your server file
+
+// Get single team by ID
+server.get('/teams/:id', async (req, res) => {
+  const { id } = req.params;
+  const token = req.headers.token;
+
+  if (!token) {
+    return res.status(401).json({ error: "Token required" });
+  }
+
+  try {
+    await connection.connect();
+    const db = await connection.db(DB);
+    const collection = await db.collection("TEAMS");
+    
+    const { ObjectId } = require('mongodb');
+    const result = await collection.findOne({ _id: new ObjectId(id) });
+    
+    if (!result) {
+      return res.status(404).json({ error: "Team not found" });
+    }
+    
+    res.status(200).json(result);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    connection.close();
+  }
+});
+
+// Create new team (Admin only)
+server.post('/adminteams', async (req, res) => {
+  const token = req.headers.token;
+  const { name, captain, coach, owner, state, logo, win, moto } = req.body;
+
+  if (!token) {
+    return res.status(401).json({ error: "Token required" });
+  }
+
+  try {
+    await connection.connect();
+    const db = await connection.db(DB);
+    
+    // Check if user is admin
+    const usersCollection = db.collection("USERS");
+    const user = await usersCollection.findOne({ token });
+    
+    if (!user || !user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    // Validate required fields
+    if (!name || !captain || !coach || !owner || !state || !logo) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const teamsCollection = db.collection("TEAMS");
+    
+    // Check if team name already exists
+    const existingTeam = await teamsCollection.findOne({ name });
+    if (existingTeam) {
+      return res.status(400).json({ error: "Team name already exists" });
+    }
+
+    const newTeam = {
+      name,
+      captain,
+      coach,
+      owner,
+      state,
+      logo,
+      win: win || "",
+      moto: moto || ""
+    };
+
+    const result = await teamsCollection.insertOne(newTeam);
+    res.status(201).json({ 
+      message: "Team created successfully", 
+      teamId: result.insertedId 
+    });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    connection.close();
+  }
+});
+
+// Update team (Admin only)
+server.put('/adminteams/:id', async (req, res) => {
+  const { id } = req.params;
+  const token = req.headers.token;
+  const { name, captain, coach, owner, state, logo, win, moto } = req.body;
+
+  if (!token) {
+    return res.status(401).json({ error: "Token required" });
+  }
+
+  try {
+    await connection.connect();
+    const db = await connection.db(DB);
+    
+    // Check if user is admin
+    const usersCollection = db.collection("USERS");
+    const user = await usersCollection.findOne({ token });
+    
+    if (!user || !user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    // Validate required fields
+    if (!name || !captain || !coach || !owner || !state || !logo) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const teamsCollection = db.collection("TEAMS");
+    const { ObjectId } = require('mongodb');
+    
+    // Check if team exists
+    const existingTeam = await teamsCollection.findOne({ _id: new ObjectId(id) });
+    if (!existingTeam) {
+      return res.status(404).json({ error: "Team not found" });
+    }
+
+    // Check if new name conflicts with another team
+    const nameConflict = await teamsCollection.findOne({ 
+      name, 
+      _id: { $ne: new ObjectId(id) } 
+    });
+    if (nameConflict) {
+      return res.status(400).json({ error: "Team name already exists" });
+    }
+
+    const updatedTeam = {
+      name,
+      captain,
+      coach,
+      owner,
+      state,
+      logo,
+      win: win || "",
+      moto: moto || ""
+    };
+
+    const result = await teamsCollection.updateOne(
+      { _id: new ObjectId(id) },
+      { $set: updatedTeam }
+    );
+
+    if (result.modifiedCount === 0) {
+      return res.status(400).json({ error: "No changes made" });
+    }
+
+    res.status(200).json({ message: "Team updated successfully" });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    connection.close();
+  }
+});
+
+// Delete team (Admin only)
+server.delete('/adminteams/:id', async (req, res) => {
+  const { id } = req.params;
+  const token = req.headers.token;
+
+  if (!token) {
+    return res.status(401).json({ error: "Token required" });
+  }
+
+  try {
+    await connection.connect();
+    const db = await connection.db(DB);
+    
+    // Check if user is admin
+    const usersCollection = db.collection("USERS");
+    const user = await usersCollection.findOne({ token });
+    
+    if (!user || !user.isAdmin) {
+      return res.status(403).json({ error: "Admin access required" });
+    }
+
+    const teamsCollection = db.collection("TEAMS");
+    const { ObjectId } = require('mongodb');
+    
+    // Check if team exists
+    const existingTeam = await teamsCollection.findOne({ _id: new ObjectId(id) });
+    if (!existingTeam) {
+      return res.status(404).json({ error: "Team not found" });
+    }
+
+    const result = await teamsCollection.deleteOne({ _id: new ObjectId(id) });
+
+    if (result.deletedCount === 0) {
+      return res.status(400).json({ error: "Failed to delete team" });
+    }
+
+    res.status(200).json({ message: "Team deleted successfully" });
+
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: "Internal server error" });
+  } finally {
+    connection.close();
+  }
+});
+
+
 
 
 // server.post('/players', (req, res) => {
