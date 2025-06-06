@@ -64,24 +64,36 @@ server.get("/users/roles", async (req, res) => {
 });
 
 server.post("/users", async (req, res) => {
-  if (req.body.name && req.body.email && req.body.password && req.body.phone)
-    await connection.connect();
-  const db = await connection.db(DB);
-  const collection = await db.collection("USERS");
-  const result = await collection.find({ email: req.body.email }).toArray();
+  try {
+    const { name, email, password, phone } = req.body;
 
-  if (result.length > 0) {
-    res.status(401).json({ error: "Email already exists" });
-  } else {
-    await collection.insertOne({
-      name: req.body.name,
-      email: req.body.email,
-      password: req.body.password,
-      phone: req.body.phone,
-    });
+    // Validate input
+    if (!name || !email || !password || !phone) {
+      return res.status(400).json({ error: "All fields are required" });
+    }
+
+    // Connect to DB
+    await connection.connect();
+    const db = connection.db(DB);
+    const collection = db.collection("USERS");
+
+    // Check if email already exists
+    const result = await collection.find({ email }).toArray();
+
+    if (result.length > 0) {
+      return res.status(401).json({ error: "Email already exists" });
+    }
+
+    // Insert new user
+    await collection.insertOne({ name, email, password, phone });
+
     res.status(200).json({ message: "User created successfully" });
+  } catch (err) {
+    console.error("Signup error:", err);
+    res.status(500).json({ error: "Internal Server Error" });
+  } finally {
+    connection.close(); // ensure it always closes
   }
-  connection.close();
 });
 
 server.post("/tokens", async (req, res) => {
